@@ -1,0 +1,1 @@
+// GET for the front end (active incidents and the heat map)
