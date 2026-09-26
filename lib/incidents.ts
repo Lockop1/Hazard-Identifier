@@ -1,1 +1,0 @@
-// 5 incidents rule + keeping incidents active
