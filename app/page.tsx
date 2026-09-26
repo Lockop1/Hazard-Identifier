@@ -4,9 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+const REFRESH_MS = 10_000;
+
 type Likelihood = { p_this_hour: number; reports_30d: number };
 type ActiveIncident = { type: string; since: string; expires_at: string; reports: number };
 type RoadProps = {
+  road_place_id: string;
   road_name: string | null;
   p_any_hazard_this_hour: number;
   top_type: string | null;
@@ -16,6 +19,7 @@ type RoadProps = {
 };
 type RoadFeature = { type: "Feature"; geometry: { type: "Point"; coordinates: [number, number] }; properties: RoadProps };
 type MapData = { type: "FeatureCollection"; hour_of_day: number; features: RoadFeature[] };
+type MarkerEntry = { marker: maplibregl.Marker; el: HTMLElement; active: boolean; sig: string };
 
 const TYPES: Record<string, { label: string; short: string; icon: string }> = {
   collision: { label: "Collision", short: "Collision", icon: "💥" },
@@ -25,11 +29,11 @@ const TYPES: Record<string, { label: string; short: string; icon: string }> = {
   other: { label: "Other hazard", short: "Other", icon: "⚠️" },
 };
 
-// Full-screen Miami hazard map: active incidents, risk hotspots with % badges, a per-type heatmap, and a legend.
+// Full-screen Miami hazard map that refreshes live: active incidents, risk hotspots, a per-type heatmap, and a legend.
 export default function Home() {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const markersRef = useRef<{ el: HTMLElement; active: boolean }[]>([]);
+  const markersRef = useRef<Map<string, MarkerEntry>>(new Map());
 
   const [showActive, setShowActive] = useState(true);
   const [showHotspots, setShowHotspots] = useState(true);
@@ -37,6 +41,7 @@ export default function Home() {
   const [heatType, setHeatType] = useState("all");
   const [hour, setHour] = useState<number | null>(null);
   const [counts, setCounts] = useState({ roads: 0, active: 0 });
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
   const stateRef = useRef({ showActive, showHotspots, showHeat, heatType });
   stateRef.current = { showActive, showHotspots, showHeat, heatType };
@@ -51,23 +56,13 @@ export default function Home() {
       zoom: 11,
     });
     mapRef.current = map;
+
     let cancelled = false;
+    let inFlight = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
 
-    map.on("load", async () => {
-      let data: MapData;
-      try {
-        data = await (await fetch("/api/map")).json();
-      } catch (err) {
-        console.error("failed to load /api/map", err);
-        return;
-      }
-      if (cancelled) return;
-
-      setHour(data.hour_of_day);
-      setCounts({
-        roads: data.features.length,
-        active: data.features.filter((f) => f.properties.active_incidents.length > 0).length,
-      });
+    const applyData = (data: MapData) => {
+      const s = stateRef.current;
 
       for (const f of data.features) {
         const props = f.properties as any;
@@ -75,48 +70,111 @@ export default function Home() {
         for (const t of Object.keys(TYPES)) props[`p_${t}`] = f.properties.likelihood?.[t]?.p_this_hour ?? 0;
       }
 
-      const s = stateRef.current;
-      map.addSource("roads", { type: "geojson", data: data as any });
-      map.addLayer({
-        id: "road-heat",
-        type: "heatmap",
-        source: "roads",
-        layout: { visibility: s.showHeat ? "visible" : "none" },
-        paint: {
-          "heatmap-weight": heatWeight(s.heatType),
-          "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 15, 3],
-          "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 25, 15, 70],
-          "heatmap-color": [
-            "interpolate", ["linear"], ["heatmap-density"],
-            0, "rgba(0,0,0,0)",
-            0.2, "#fde68a",
-            0.5, "#f59e0b",
-            0.8, "#ef4444",
-            1, "#991b1b",
-          ],
-          "heatmap-opacity": 0.75,
-        },
-      });
-
-      for (const f of data.features) {
-        const { el, active } = buildMarker(f.properties);
-        const popup = new maplibregl.Popup({ offset: 22, className: "hz-popup", maxWidth: "300px" })
-          .setHTML(popupHtml(f.properties));
-        new maplibregl.Marker({ element: el }).setLngLat(f.geometry.coordinates).setPopup(popup).addTo(map);
-        el.style.display = (active ? s.showActive : s.showHotspots) ? "" : "none";
-        markersRef.current.push({ el, active });
+      const source = map.getSource("roads") as maplibregl.GeoJSONSource | undefined;
+      if (source) {
+        source.setData(data as any);
+      } else {
+        map.addSource("roads", { type: "geojson", data: data as any });
+        map.addLayer({
+          id: "road-heat",
+          type: "heatmap",
+          source: "roads",
+          layout: { visibility: s.showHeat ? "visible" : "none" },
+          paint: {
+            "heatmap-weight": heatWeight(s.heatType),
+            "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 15, 3],
+            "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 25, 15, 70],
+            "heatmap-color": [
+              "interpolate", ["linear"], ["heatmap-density"],
+              0, "rgba(0,0,0,0)",
+              0.2, "#fde68a",
+              0.5, "#f59e0b",
+              0.8, "#ef4444",
+              1, "#991b1b",
+            ],
+            "heatmap-opacity": 0.75,
+          },
+        });
       }
+
+      const seen = new Set<string>();
+      for (const f of data.features) {
+        const p = f.properties;
+        const id = p.road_place_id;
+        seen.add(id);
+        const active = p.active_incidents.length > 0;
+
+        let entry = markersRef.current.get(id);
+        if (!entry) {
+          const el = document.createElement("div");
+          const popup = new maplibregl.Popup({ offset: 22, className: "hz-popup", maxWidth: "300px" });
+          const marker = new maplibregl.Marker({ element: el }).setLngLat(f.geometry.coordinates).setPopup(popup).addTo(map);
+          entry = { marker, el, active, sig: "" };
+          markersRef.current.set(id, entry);
+        }
+
+        const { dot, sig } = buildDot(p);
+        if (sig !== entry.sig) {
+          entry.el.replaceChildren(dot);
+          entry.sig = sig;
+        }
+        entry.active = active;
+        entry.el.style.zIndex = active ? "2" : "";
+        entry.el.style.display = (active ? s.showActive : s.showHotspots) ? "" : "none";
+        entry.marker.setLngLat(f.geometry.coordinates);
+        entry.marker.getPopup()?.setHTML(popupHtml(p));
+      }
+
+      for (const [id, entry] of markersRef.current) {
+        if (!seen.has(id)) {
+          entry.marker.remove();
+          markersRef.current.delete(id);
+        }
+      }
+
+      setHour(data.hour_of_day);
+      setCounts({
+        roads: data.features.length,
+        active: data.features.filter((f) => f.properties.active_incidents.length > 0).length,
+      });
+      setUpdatedAt(new Date());
+    };
+
+    const load = async () => {
+      if (inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        const res = await fetch("/api/map", { cache: "no-store" });
+        if (res.ok) {
+          const data: MapData = await res.json();
+          if (!cancelled) applyData(data);
+        }
+      } catch (err) {
+        console.error("failed to load /api/map", err);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const onVisible = () => { if (!document.hidden) load(); };
+
+    map.on("load", () => {
+      load();
+      timer = setInterval(load, REFRESH_MS);
+      document.addEventListener("visibilitychange", onVisible);
     });
 
     return () => {
       cancelled = true;
-      markersRef.current = [];
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      markersRef.current.clear();
       map.remove();
     };
   }, []);
 
   useEffect(() => {
-    for (const { el, active } of markersRef.current) {
+    for (const { el, active } of markersRef.current.values()) {
       el.style.display = (active ? showActive : showHotspots) ? "" : "none";
     }
   }, [showActive, showHotspots]);
@@ -144,6 +202,9 @@ export default function Home() {
           {counts.active} active incident{counts.active === 1 ? "" : "s"} · {counts.roads} roads tracked
           {hour !== null && ` · risk for ${formatHour(hour)}`}
         </div>
+        {updatedAt && (
+          <div className="hz-live"><span className="hz-live-dot" />Live · updated {clock(updatedAt.toISOString())}</div>
+        )}
 
         <Toggle label="Active incidents" on={showActive} onClick={() => setShowActive((v) => !v)} />
         <Toggle label="Hotspot dots" on={showHotspots} onClick={() => setShowHotspots((v) => !v)} />
@@ -188,29 +249,27 @@ function heatWeight(type: string): any {
   return ["interpolate", ["linear"], ["coalesce", ["get", key], 0], 0, 0, 0.01, 0.05, 0.5, 1];
 }
 
-// Builds the DOM element for one road: red pulsing icon if active, orange risk-sized dot with a % badge otherwise.
-function buildMarker(p: RoadProps): { el: HTMLElement; active: boolean } {
-  const active = p.active_incidents.length > 0;
-  const el = document.createElement("div");
-  if (active) el.style.zIndex = "2";
+// Builds the visible dot for one road plus a signature string used to skip redraws when nothing changed.
+function buildDot(p: RoadProps): { dot: HTMLElement; sig: string } {
+  const inc = topIncident(p);
+  const risk = pct(p.p_any_hazard_this_hour);
+  const size = inc ? 34 : Math.round((12 + Math.min(p.p_any_hazard_this_hour ?? 0, 0.5) * 40) * 1.5);
 
   const dot = document.createElement("div");
-  dot.className = active ? "hz-dot active" : "hz-dot";
-  const size = active ? 34 : Math.round((12 + Math.min(p.p_any_hazard_this_hour ?? 0, 0.5) * 40) * 1.5);
+  dot.className = inc ? "hz-dot active" : "hz-dot";
   dot.style.width = `${size}px`;
   dot.style.height = `${size}px`;
 
-  if (active) {
-    dot.textContent = icon(topIncident(p)!.type);
+  if (inc) {
+    dot.textContent = icon(inc.type);
   } else {
     const badge = document.createElement("span");
     badge.className = "hz-badge";
-    badge.textContent = `${pct(p.p_any_hazard_this_hour)}%`;
+    badge.textContent = `${risk}%`;
     dot.appendChild(badge);
   }
 
-  el.appendChild(dot);
-  return { el, active };
+  return { dot, sig: inc ? `a|${inc.type}` : `h|${size}|${risk}` };
 }
 
 // Builds the popup HTML: active incident details, overall risk, and a per-type breakdown for this hour.
@@ -281,7 +340,10 @@ const CSS = `
   font: 13px/1.4 system-ui, sans-serif; color: #111827;
 }
 .hz-title { font-weight: 700; font-size: 15px; }
-.hz-sub { color: #6b7280; font-size: 12px; margin: 2px 0 10px; }
+.hz-sub { color: #6b7280; font-size: 12px; margin: 2px 0 4px; }
+.hz-live { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; margin-bottom: 8px; }
+.hz-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: hz-blink 2s ease-in-out infinite; }
+@keyframes hz-blink { 50% { opacity: .3; } }
 .hz-toggle {
   display: flex; justify-content: space-between; align-items: center; width: 100%;
   margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb;
