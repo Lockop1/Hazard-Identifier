@@ -9,11 +9,11 @@
     "start": "next start"
   },
   "dependencies": {
-    "maplibre-gl": "^6.11.2",
     "@tailwindcss/postcss": "^4.3.3",
+    "maplibre-gl": "^6.11.2",
     "next": "^16.3.6",
-    "postgres": "^3.4.9",
     "postcss": "^8.5.28",
+    "postgres": "^3.4.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tailwindcss": "^4.3.3"
