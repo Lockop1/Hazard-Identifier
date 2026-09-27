@@ -21,6 +21,28 @@ type RoadFeature = { type: "Feature"; geometry: { type: "Point"; coordinates: [n
 type MapData = { type: "FeatureCollection"; hour_of_day: number; features: RoadFeature[] };
 type MarkerEntry = { marker: maplibregl.Marker; el: HTMLElement; active: boolean; sig: string };
 
+type RouteHazard = {
+  kind: "confirmed" | "potential";
+  type: string;
+  road_place_id: string;
+  road_name: string | null;
+  lat: number;
+  lon: number;
+  position: number;
+  distance_mi: number;
+  eta_min: number;
+  reports?: number;
+  p_this_hour?: number;
+};
+type RouteResult = {
+  rank: number;
+  duration_min: number;
+  distance_mi: number;
+  risk_this_hour: number;
+  geometry: { type: "LineString"; coordinates: [number, number][] };
+  hazards: RouteHazard[];
+};
+
 const TYPES: Record<string, { label: string; short: string; icon: string }> = {
   collision: { label: "Collision", short: "Collision", icon: "💥" },
   road_obstruction: { label: "Road obstruction", short: "Obstruction", icon: "🚧" },
@@ -29,12 +51,23 @@ const TYPES: Record<string, { label: string; short: string; icon: string }> = {
   other: { label: "Other hazard", short: "Other", icon: "⚠️" },
 };
 
-// Full-screen Miami hazard map that refreshes live: active incidents, risk hotspots, a per-type heatmap, and a legend.
+const PLACES: Record<string, string> = {
+  FIU: "25.7563,-80.3752",
+  "South Beach": "25.7790,-80.1405",
+  Brickell: "25.7650,-80.1920",
+  Doral: "25.8105,-80.3120",
+  Aventura: "25.9530,-80.1430",
+};
+const DESTINATIONS = ["South Beach", "Brickell", "Doral", "Aventura"];
+
+// Full-screen Miami hazard map: live incidents, risk hotspots, per-type heatmap, and directions with hazards along the route.
 export default function Home() {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Map<string, MarkerEntry>>(new Map());
+  const myLocRef = useRef<string | null>(null);
 
+  const [mapReady, setMapReady] = useState(false);
   const [showActive, setShowActive] = useState(true);
   const [showHotspots, setShowHotspots] = useState(true);
   const [showHeat, setShowHeat] = useState(false);
@@ -42,6 +75,14 @@ export default function Home() {
   const [hour, setHour] = useState<number | null>(null);
   const [counts, setCounts] = useState({ roads: 0, active: 0 });
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+
+  const [from, setFrom] = useState("FIU");
+  const [to, setTo] = useState("");
+  const [routes, setRoutes] = useState<RouteResult[] | null>(null);
+  const [selected, setSelected] = useState(0);
+  const [focused, setFocused] = useState<RouteHazard | null>(null);
+  const [routing, setRouting] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
 
   const stateRef = useRef({ showActive, showHotspots, showHeat, heatType });
   stateRef.current = { showActive, showHotspots, showHeat, heatType };
@@ -75,26 +116,29 @@ export default function Home() {
         source.setData(data as any);
       } else {
         map.addSource("roads", { type: "geojson", data: data as any });
-        map.addLayer({
-          id: "road-heat",
-          type: "heatmap",
-          source: "roads",
-          layout: { visibility: s.showHeat ? "visible" : "none" },
-          paint: {
-            "heatmap-weight": heatWeight(s.heatType),
-            "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 15, 3],
-            "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 25, 15, 70],
-            "heatmap-color": [
-              "interpolate", ["linear"], ["heatmap-density"],
-              0, "rgba(0,0,0,0)",
-              0.2, "#fde68a",
-              0.5, "#f59e0b",
-              0.8, "#ef4444",
-              1, "#991b1b",
-            ],
-            "heatmap-opacity": 0.75,
+        map.addLayer(
+          {
+            id: "road-heat",
+            type: "heatmap",
+            source: "roads",
+            layout: { visibility: s.showHeat ? "visible" : "none" },
+            paint: {
+              "heatmap-weight": heatWeight(s.heatType),
+              "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 9, 1, 15, 3],
+              "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 9, 25, 15, 70],
+              "heatmap-color": [
+                "interpolate", ["linear"], ["heatmap-density"],
+                0, "rgba(0,0,0,0)",
+                0.2, "#fde68a",
+                0.5, "#f59e0b",
+                0.8, "#ef4444",
+                1, "#991b1b",
+              ],
+              "heatmap-opacity": 0.75,
+            },
           },
-        });
+          map.getLayer("route-alt") ? "route-alt" : undefined
+        );
       }
 
       const seen = new Set<string>();
@@ -159,6 +203,7 @@ export default function Home() {
     const onVisible = () => { if (!document.hidden) load(); };
 
     map.on("load", () => {
+      setMapReady(true);
       load();
       timer = setInterval(load, REFRESH_MS);
       document.addEventListener("visibilitychange", onVisible);
@@ -191,6 +236,110 @@ export default function Home() {
     map.setPaintProperty("road-heat", "heatmap-weight", heatWeight(heatType));
   }, [heatType]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    const data = {
+      type: "FeatureCollection",
+      features: (routes ?? []).map((r, i) => ({
+        type: "Feature",
+        geometry: r.geometry,
+        properties: { idx: i, selected: i === selected },
+      })),
+    };
+
+    const src = map.getSource("routes") as maplibregl.GeoJSONSource | undefined;
+    if (src) {
+      src.setData(data as any);
+    } else {
+      map.addSource("routes", { type: "geojson", data: data as any });
+      const layout = { "line-cap": "round" as const, "line-join": "round" as const };
+      map.addLayer({
+        id: "route-alt", type: "line", source: "routes", filter: ["!", ["get", "selected"]], layout,
+        paint: { "line-color": "#9ca3af", "line-width": 5, "line-opacity": 0.85 },
+      });
+      map.addLayer({
+        id: "route-casing", type: "line", source: "routes", filter: ["get", "selected"], layout,
+        paint: { "line-color": "#ffffff", "line-width": 10 },
+      });
+      map.addLayer({
+        id: "route-main", type: "line", source: "routes", filter: ["get", "selected"], layout,
+        paint: { "line-color": "#2563eb", "line-width": 6 },
+      });
+      map.on("click", "route-alt", (e) => {
+        const idx = e.features?.[0]?.properties?.idx;
+        if (typeof idx === "number") {
+          setSelected(idx);
+          setFocused(null);
+        }
+      });
+      map.on("mouseenter", "route-alt", () => (map.getCanvas().style.cursor = "pointer"));
+      map.on("mouseleave", "route-alt", () => (map.getCanvas().style.cursor = ""));
+    }
+
+    const r = routes?.[selected];
+    if (r) {
+      const bounds = new maplibregl.LngLatBounds();
+      for (const c of r.geometry.coordinates) bounds.extend(c);
+      map.fitBounds(bounds, { padding: { top: 60, bottom: 230, left: 60, right: 60 }, maxZoom: 14 });
+    }
+  }, [routes, selected, mapReady]);
+
+  const resolvePlace = (text: string) => {
+    if (text === "My location" && myLocRef.current) return myLocRef.current;
+    return PLACES[text] ?? text;
+  };
+
+  const getDirections = async (dest = to) => {
+    if (!from.trim() || !dest.trim()) return;
+    setRouting(true);
+    setRouteError(null);
+    setFocused(null);
+    try {
+      const url = `/api/directions?from=${encodeURIComponent(resolvePlace(from))}&to=${encodeURIComponent(resolvePlace(dest))}`;
+      const data = await (await fetch(url, { cache: "no-store" })).json();
+      if (!data.ok) {
+        setRoutes(null);
+        setRouteError("Couldn't find a route. Try a fuller address.");
+        return;
+      }
+      setRoutes(data.routes);
+      setSelected(0);
+    } catch {
+      setRouteError("Couldn't reach the server.");
+    } finally {
+      setRouting(false);
+    }
+  };
+
+  const locateMe = () => {
+    if (!navigator.geolocation) {
+      setRouteError("Location isn't available in this browser.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        myLocRef.current = `${pos.coords.latitude},${pos.coords.longitude}`;
+        setFrom("My location");
+      },
+      () => setRouteError("Location unavailable (needs HTTPS and permission)."),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
+
+  const focusHazard = (h: RouteHazard) => {
+    setFocused(h);
+    const map = mapRef.current;
+    if (!map) return;
+    map.flyTo({ center: [h.lon, h.lat], zoom: 14 });
+    const entry = markersRef.current.get(h.road_place_id);
+    const popup = entry?.marker.getPopup();
+    if (entry && popup && !popup.isOpen()) entry.marker.togglePopup();
+  };
+
+  const route = routes?.[selected];
+
   return (
     <>
       <style>{CSS}</style>
@@ -205,6 +354,25 @@ export default function Home() {
         {updatedAt && (
           <div className="hz-live"><span className="hz-live-dot" />Live · updated {clock(updatedAt.toISOString())}</div>
         )}
+
+        <form className="hz-dir" onSubmit={(e) => { e.preventDefault(); getDirections(); }}>
+          <div className="hz-input-row">
+            <input className="hz-input" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="Start" />
+            <button type="button" className="hz-icon-btn" onClick={locateMe} title="Use my location">📍</button>
+          </div>
+          <div className="hz-input-row">
+            <input className="hz-input" value={to} onChange={(e) => setTo(e.target.value)} placeholder="Where to?" />
+            <button type="submit" className="hz-go" disabled={routing}>{routing ? "…" : "Go"}</button>
+          </div>
+          <div className="hz-chips">
+            {DESTINATIONS.map((d) => (
+              <button type="button" key={d} className="hz-chip" onClick={() => { setTo(d); getDirections(d); }}>
+                {d}
+              </button>
+            ))}
+          </div>
+          {routeError && <div className="hz-error">{routeError}</div>}
+        </form>
 
         <Toggle label="Active incidents" on={showActive} onClick={() => setShowActive((v) => !v)} />
         <Toggle label="Hotspot dots" on={showHotspots} onClick={() => setShowHotspots((v) => !v)} />
@@ -230,6 +398,51 @@ export default function Home() {
           <div className="hz-row"><span className="hz-sw-badge">23%</span>Chance of any hazard this hour</div>
         </div>
       </div>
+
+      {routes && route && (
+        <div className="hz-sheet">
+          <div className="hz-sheet-top">
+            <div className="hz-route-pills">
+              {routes.map((r, i) => (
+                <button
+                  key={i}
+                  className={`hz-route-pill ${i === selected ? "on" : ""}`}
+                  onClick={() => { setSelected(i); setFocused(null); }}
+                >
+                  {r.duration_min} min <span>{r.distance_mi} mi</span>
+                  {i === 0 && <em>Safest</em>}
+                </button>
+              ))}
+            </div>
+            <button className="hz-close" aria-label="Close" onClick={() => { setRoutes(null); setFocused(null); }}>×</button>
+          </div>
+
+          <div className="hz-track">
+            <div className="hz-track-line" />
+            <span className="hz-track-start" />
+            <span className="hz-track-end">🏁</span>
+            {route.hazards.map((h, i) => (
+              <button
+                key={i}
+                className={`hz-track-hz ${h.kind}`}
+                style={{ left: `${4 + h.position * 88}%` }}
+                onClick={() => focusHazard(h)}
+                title={`${label(h.type)} · ${h.distance_mi} mi`}
+              >
+                {icon(h.type)}
+                {h.kind === "potential" && <span className="hz-badge">{pct(h.p_this_hour)}%</span>}
+              </button>
+            ))}
+          </div>
+
+          {focused && (
+            <div className="hz-caption">
+              {icon(focused.type)} <b>{label(focused.type)}</b>
+              {focused.road_name && ` on ${focused.road_name}`} · in {focused.distance_mi} mi (~{focused.eta_min} min)
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -341,9 +554,25 @@ const CSS = `
 }
 .hz-title { font-weight: 700; font-size: 15px; }
 .hz-sub { color: #6b7280; font-size: 12px; margin: 2px 0 4px; }
-.hz-live { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; margin-bottom: 8px; }
+.hz-live { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; margin-bottom: 4px; }
 .hz-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: hz-blink 2s ease-in-out infinite; }
 @keyframes hz-blink { 50% { opacity: .3; } }
+
+.hz-dir { margin: 6px 0 4px; padding-bottom: 10px; border-bottom: 1px solid #e5e7eb; }
+.hz-input-row { display: flex; gap: 6px; margin-top: 6px; }
+.hz-input {
+  flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb;
+  font: 13px system-ui, sans-serif; color: #111827; background: #fff;
+}
+.hz-input:focus { outline: none; border-color: #2563eb; }
+.hz-icon-btn { width: 36px; border: 1px solid #e5e7eb; background: #fff; border-radius: 10px; cursor: pointer; }
+.hz-go {
+  padding: 0 14px; border: none; border-radius: 10px; background: #2563eb; color: #fff;
+  font: 600 13px system-ui, sans-serif; cursor: pointer;
+}
+.hz-go:disabled { opacity: .6; }
+.hz-error { color: #dc2626; font-size: 12px; margin-top: 6px; }
+
 .hz-toggle {
   display: flex; justify-content: space-between; align-items: center; width: 100%;
   margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb;
@@ -370,6 +599,48 @@ const CSS = `
   flex: none; padding: 0 5px; border-radius: 999px; background: #111827; color: #fff;
   font: 600 10px/15px system-ui, sans-serif;
 }
+
+.hz-sheet {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 2;
+  width: min(560px, calc(100% - 24px)); padding: 12px 14px;
+  background: #fff; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.2);
+  font: 13px/1.4 system-ui, sans-serif; color: #111827;
+}
+.hz-sheet-top { display: flex; align-items: center; gap: 8px; }
+.hz-route-pills { display: flex; gap: 6px; flex: 1; overflow-x: auto; }
+.hz-route-pill {
+  display: flex; align-items: baseline; gap: 6px; padding: 6px 10px; white-space: nowrap;
+  border-radius: 10px; border: 1px solid #e5e7eb; background: #fff; color: #111827;
+  font: 700 14px system-ui, sans-serif; cursor: pointer;
+}
+.hz-route-pill span { font-weight: 500; font-size: 12px; color: #6b7280; }
+.hz-route-pill em { font-style: normal; font-weight: 600; font-size: 11px; color: #059669; }
+.hz-route-pill.on { border-color: #2563eb; background: #eff6ff; }
+.hz-close {
+  width: 28px; height: 28px; flex: none; border: none; border-radius: 50%;
+  background: #f3f4f6; font-size: 18px; line-height: 1; cursor: pointer;
+}
+
+.hz-track { position: relative; height: 58px; margin: 6px 4px 0; }
+.hz-track-line {
+  position: absolute; left: 4%; right: 8%; top: 50%; height: 6px; margin-top: -3px;
+  border-radius: 3px; background: #2563eb;
+}
+.hz-track-start {
+  position: absolute; left: 4%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border-radius: 50%; background: #2563eb; border: 3px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.hz-track-end { position: absolute; left: 96%; top: 50%; transform: translate(-50%, -50%); font-size: 18px; }
+.hz-track-hz {
+  position: absolute; top: 50%; transform: translate(-50%, -50%); padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  cursor: pointer; transition: transform .15s;
+}
+.hz-track-hz:hover { transform: translate(-50%, -50%) scale(1.15); }
+.hz-track-hz.confirmed { width: 30px; height: 30px; background: #e11d48; font-size: 15px; z-index: 2; }
+.hz-track-hz.potential { width: 22px; height: 22px; background: #f59e0b; font-size: 11px; z-index: 1; }
+.hz-caption { margin-top: 2px; text-align: center; font-size: 12px; color: #374151; }
 
 .hz-popup .maplibregl-popup-content {
   border-radius: 12px; padding: 12px 14px; min-width: 230px;
