@@ -1,6 +1,5 @@
 "use client";
 
-
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -346,19 +345,13 @@ export default function Home() {
   };
 
   const route = routes?.[selected];
+  // The nearest confirmed (active) incident on the currently selected route, if any.
+  const activeHazard = route
+    ? [...route.hazards].filter((h) => h.kind === "confirmed").sort((a, b) => a.position - b.position)[0]
+    : undefined;
 
   return (
     <>
-    <style>{CSS}</style>
-    <div ref={container} style={{ position: "fixed", inset: 0 }} />
-
-    {/* Feedback Toast Notification */}
-    {toastMessage && (
-      <div className="hz-toast">
-        <span className="hz-toast-icon">✅</span>
-        <span className="hz-toast-text">{toastMessage}</span>
-      </div>
-    )}
       <style>{CSS}</style>
       <div ref={container} style={{ position: "fixed", inset: 0 }} />
 
@@ -427,90 +420,67 @@ export default function Home() {
         </button>
       </div>
 
-<div className = "alertpopup">
-  <div className = "circle">
-<img src="\fluentui-system-icons_warning.svg" alt="Alert" />
-            
-  </div>
-  
-  <p>Collision Detected Ahead</p>
-</div>
-
-
-
       {routes && route && (
-        <div className="hz-sheet">
-          <div className="hz-sheet-top">
-            <div className="hz-route-pills">
-              {routes.map((r, i) => (
+        <div className="hz-sheet-wrap">
+          {activeHazard && (
+            <div className="alertpopup">
+              <div className="circle">
+                <img src="/fluentui-system-icons_warning.svg" alt="Alert" />
+              </div>
+              <p>
+                {label(activeHazard.type)} detected on this route
+                {activeHazard.road_name && ` · ${activeHazard.road_name}`} · {activeHazard.distance_mi} mi ahead
+              </p>
+            </div>
+          )}
+
+          <div className="hz-sheet">
+            <div className="hz-sheet-top">
+              <div className="hz-route-pills">
+                {routes.map((r, i) => (
+                  <button
+                    key={i}
+                    className={`hz-route-pill ${i === selected ? "on" : ""}`}
+                    onClick={() => { setSelected(i); setFocused(null); }}
+                  >
+                    {r.duration_min} min <span>{r.distance_mi} mi</span>
+                    {i === 0 && <em>Safest</em>}
+                  </button>
+                ))}
+              </div>
+              <button className="hz-close" aria-label="Close" onClick={() => { setRoutes(null); setFocused(null); }}>×</button>
+            </div>
+
+            <div className="hz-track">
+              <div className="hz-track-line" />
+              <span className="hz-track-start" />
+              <span className="hz-track-end">🏁</span>
+              {route.hazards.map((h, i) => (
                 <button
                   key={i}
-                  className={`hz-route-pill ${i === selected ? "on" : ""}`}
-                  onClick={() => { setSelected(i); setFocused(null); }}
+                  className={`hz-track-hz ${h.kind}`}
+                  style={{ left: `${4 + h.position * 88}%` }}
+                  onClick={() => focusHazard(h)}
+                  title={`${label(h.type)} · ${h.distance_mi} mi`}
                 >
-                  {r.duration_min} min <span>{r.distance_mi} mi</span>
-                  {i === 0 && <em>Safest</em>}
+                  {icon(h.type)}
+                  {h.kind === "potential" && <span className="hz-badge">{pct(h.p_this_hour)}%</span>}
                 </button>
               ))}
             </div>
-            <button className="hz-close" aria-label="Close" onClick={() => { setRoutes(null); setFocused(null); }}>×</button>
-          </div>
 
-          <div className="hz-track">
-            <div className="hz-track-line" />
-            <span className="hz-track-start" />
-            <span className="hz-track-end">🏁</span>
-            {route.hazards.map((h, i) => (
-              <button
-                key={i}
-                className={`hz-track-hz ${h.kind}`}
-                style={{ left: `${4 + h.position * 88}%` }}
-                onClick={() => focusHazard(h)}
-                title={`${label(h.type)} · ${h.distance_mi} mi`}
-              >
-                {icon(h.type)}
-                {h.kind === "potential" && <span className="hz-badge">{pct(h.p_this_hour)}%</span>}
-              </button>
-            ))}
+            {focused && (
+              <div className="hz-caption">
+                {icon(focused.type)} <b>{label(focused.type)}</b>
+                {focused.road_name && ` on ${focused.road_name}`} · in {focused.distance_mi} mi (~{focused.eta_min} min)
+              </div>
+            )}
           </div>
-
-          {focused && (
-            <div className="hz-caption">
-              {icon(focused.type)} <b>{label(focused.type)}</b>
-              {focused.road_name && ` on ${focused.road_name}`} · in {focused.distance_mi} mi (~{focused.eta_min} min)
-            </div>
-          )}
         </div>
       )}
     </>
   );
 }
-
-// Toast notification system for reporting incidents
-// Inside your Home component in page.tsx
-const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-// Helper function to trigger the popup
-const showToast = (message: string) => {
-  setToastMessage(message);
-  setTimeout(() => {
-    setToastMessage(null);
-  }, 3000);
-};
-
-// Example report incident handler
-const handleReportIncident = async (type: string) => {
-  try {
-    // Perform your API call to save the report
-    // await fetch('/api/report', { method: 'POST', body: JSON.stringify({ type }) });
-
-    // Show feedback popup on success
-    showToast(`Report submitted! Thank you for updating the road conditions.`);
-  } catch (err) {
-    showToast("Failed to submit report. Please try again.");
-  }
-};
-
 
 
 
@@ -680,9 +650,14 @@ const CSS = `
   font: 600 10px/15px system-ui, sans-serif;
 }
 
-.hz-sheet {
+.hz-sheet-wrap {
   position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 2;
-  width: min(560px, calc(100% - 24px)); padding: 12px 14px;
+  width: min(560px, calc(100% - 24px));
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.hz-sheet {
+  width: 100%; padding: 12px 14px;
   background: #fff; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.2);
   font: 13px/1.4 system-ui, sans-serif; color: #111827;
 }
@@ -736,43 +711,8 @@ const CSS = `
 .hz-bar > div { height: 100%; background: #f59e0b; }
 .hz-pop-foot { margin-top: 6px; font-size: 11px; color: #6b7280; }
 
-.hz-toast {
-  position: fixed;
-  top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 20px;
-  background-color: #111827;
-  color: #ffffff;
-  border-radius: 999px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-  font: 600 14px/1.4 system-ui, -apple-system, sans-serif;
-  animation: hz-toast-in 0.25s ease-out;
-  pointer-events: none;
-}
-
-.hz-toast-icon {
-  font-size: 16px;
-}
-
-@keyframes hz-toast-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -12px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-}
-
-
 @media (max-width: 640px) {
   .hz-panel { left: 8px; right: 8px; top: 8px; width: auto; padding: 10px 12px; }
-  .hz-sheet { bottom: 8px; }
+  .hz-sheet-wrap { bottom: 8px; }
 }
 `;
