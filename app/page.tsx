@@ -138,6 +138,8 @@ export default function Home() {
       <style>{CSS}</style>
       <div ref={container} style={{ position: "fixed", inset: 0 }} />
 
+      <div></div>
+
       <div className="hz-panel">
         <div className="hz-title">Road Hazard Map</div>
         <div className="hz-sub">
@@ -168,6 +170,12 @@ export default function Home() {
           <div className="hz-row"><span className="hz-sw hz-sw-risk" />Hotspot, bigger = riskier now</div>
           <div className="hz-row"><span className="hz-sw-badge">23%</span>Chance of any hazard this hour</div>
         </div>
+      </div>
+
+      
+      <div className="alertpopup">
+        <img src="/path/to/alert-icon.png" alt="Alert" />
+        <p>Collison Detected Ahead</p>
       </div>
     </>
   );
