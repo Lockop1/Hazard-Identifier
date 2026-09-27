@@ -83,6 +83,11 @@ export default function Home() {
   const [focused, setFocused] = useState<RouteHazard | null>(null);
   const [routing, setRouting] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(true);
+
+  useEffect(() => {
+    if (window.innerWidth < 640) setPanelOpen(false);
+  }, []);
 
   const stateRef = useRef({ showActive, showHotspots, showHeat, heatType });
   stateRef.current = { showActive, showHotspots, showHeat, heatType };
@@ -306,6 +311,7 @@ export default function Home() {
       }
       setRoutes(data.routes);
       setSelected(0);
+      if (window.innerWidth < 640) setPanelOpen(false);
     } catch {
       setRouteError("Couldn't reach the server.");
     } finally {
@@ -345,58 +351,74 @@ export default function Home() {
       <style>{CSS}</style>
       <div ref={container} style={{ position: "fixed", inset: 0 }} />
 
-      <div className="hz-panel">
-        <div className="hz-title">Road Hazard Map</div>
+      <div className={`hz-panel ${panelOpen ? "" : "closed"}`}>
+        <div className="hz-head">
+          <div className="hz-title">Road Hazard Map</div>
+          {updatedAt && (
+            <div className="hz-live" title={`Updated ${clock(updatedAt.toISOString())}`}>
+              <span className="hz-live-dot" />Live
+            </div>
+          )}
+        </div>
         <div className="hz-sub">
-          {counts.active} active incident{counts.active === 1 ? "" : "s"} · {counts.roads} roads tracked
-          {hour !== null && ` · risk for ${formatHour(hour)}`}
+          {counts.active} active incident{counts.active === 1 ? "" : "s"} · {counts.roads} roads
+          {hour !== null && ` · ${formatHour(hour)}`}
         </div>
-        {updatedAt && (
-          <div className="hz-live"><span className="hz-live-dot" />Live · updated {clock(updatedAt.toISOString())}</div>
-        )}
 
-        <form className="hz-dir" onSubmit={(e) => { e.preventDefault(); getDirections(); }}>
-          <div className="hz-input-row">
-            <input className="hz-input" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="Start" />
-            <button type="button" className="hz-icon-btn" onClick={locateMe} title="Use my location">📍</button>
-          </div>
-          <div className="hz-input-row">
-            <input className="hz-input" value={to} onChange={(e) => setTo(e.target.value)} placeholder="Where to?" />
-            <button type="submit" className="hz-go" disabled={routing}>{routing ? "…" : "Go"}</button>
-          </div>
-          <div className="hz-chips">
-            {DESTINATIONS.map((d) => (
-              <button type="button" key={d} className="hz-chip" onClick={() => { setTo(d); getDirections(d); }}>
-                {d}
-              </button>
-            ))}
-          </div>
-          {routeError && <div className="hz-error">{routeError}</div>}
-        </form>
+        <div className="hz-body">
+          <div className="hz-body-inner">
+            <form className="hz-dir" onSubmit={(e) => { e.preventDefault(); getDirections(); }}>
+              <div className="hz-input-row">
+                <input className="hz-input" value={from} onChange={(e) => setFrom(e.target.value)} placeholder="Start" />
+                <button type="button" className="hz-icon-btn" onClick={locateMe} title="Use my location">📍</button>
+              </div>
+              <div className="hz-input-row">
+                <input className="hz-input" value={to} onChange={(e) => setTo(e.target.value)} placeholder="Where to?" />
+                <button type="submit" className="hz-go" disabled={routing}>{routing ? "…" : "Go"}</button>
+              </div>
+              <div className="hz-chips">
+                {DESTINATIONS.map((d) => (
+                  <button type="button" key={d} className="hz-chip" onClick={() => { setTo(d); getDirections(d); }}>
+                    {d}
+                  </button>
+                ))}
+              </div>
+              {routeError && <div className="hz-error">{routeError}</div>}
+            </form>
 
-        <Toggle label="Active incidents" on={showActive} onClick={() => setShowActive((v) => !v)} />
-        <Toggle label="Hotspot dots" on={showHotspots} onClick={() => setShowHotspots((v) => !v)} />
-        <Toggle label="Risk heatmap" on={showHeat} onClick={() => setShowHeat((v) => !v)} />
+            <Toggle label="Active incidents" on={showActive} onClick={() => setShowActive((v) => !v)} />
+            <Toggle label="Hotspot dots" on={showHotspots} onClick={() => setShowHotspots((v) => !v)} />
+            <Toggle label="Risk heatmap" on={showHeat} onClick={() => setShowHeat((v) => !v)} />
 
-        {showHeat && (
-          <div className="hz-chips">
-            {[["all", "All"], ...Object.entries(TYPES).map(([k, v]) => [k, v.short])].map(([key, text]) => (
-              <button
-                key={key}
-                className={`hz-chip ${heatType === key ? "on" : ""}`}
-                onClick={() => setHeatType(key)}
-              >
-                {key !== "all" && `${TYPES[key].icon} `}{text}
-              </button>
-            ))}
+            {showHeat && (
+              <div className="hz-chips">
+                {[["all", "All"], ...Object.entries(TYPES).map(([k, v]) => [k, v.short])].map(([key, text]) => (
+                  <button
+                    key={key}
+                    className={`hz-chip ${heatType === key ? "on" : ""}`}
+                    onClick={() => setHeatType(key)}
+                  >
+                    {key !== "all" && `${TYPES[key].icon} `}{text}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="hz-legend">
+              <div className="hz-row"><span className="hz-sw hz-sw-active" />Active incident (5+ live reports)</div>
+              <div className="hz-row"><span className="hz-sw hz-sw-risk" />Hotspot, bigger = riskier now</div>
+              <div className="hz-row"><span className="hz-sw-badge">23%</span>Chance of any hazard this hour</div>
+            </div>
           </div>
-        )}
-
-        <div className="hz-legend">
-          <div className="hz-row"><span className="hz-sw hz-sw-active" />Active incident (5+ live reports)</div>
-          <div className="hz-row"><span className="hz-sw hz-sw-risk" />Hotspot, bigger = riskier now</div>
-          <div className="hz-row"><span className="hz-sw-badge">23%</span>Chance of any hazard this hour</div>
         </div>
+
+        <button
+          className="hz-handle"
+          onClick={() => setPanelOpen((v) => !v)}
+          aria-label={panelOpen ? "Collapse panel" : "Expand panel"}
+        >
+          {panelOpen ? "▴" : "▾"}
+        </button>
       </div>
 
       {routes && route && (
@@ -552,11 +574,24 @@ const CSS = `
   border-radius: 14px; box-shadow: 0 4px 20px rgba(0,0,0,.15);
   font: 13px/1.4 system-ui, sans-serif; color: #111827;
 }
+.hz-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .hz-title { font-weight: 700; font-size: 15px; }
 .hz-sub { color: #6b7280; font-size: 12px; margin: 2px 0 4px; }
-.hz-live { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; margin-bottom: 4px; }
+.hz-live { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #059669; }
 .hz-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: hz-blink 2s ease-in-out infinite; }
 @keyframes hz-blink { 50% { opacity: .3; } }
+
+.hz-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows .25s ease; }
+.hz-panel.closed .hz-body { grid-template-rows: 0fr; }
+.hz-body-inner { min-height: 0; overflow: hidden; }
+
+.hz-handle {
+  position: absolute; left: 50%; bottom: -18px; transform: translateX(-50%);
+  width: 48px; height: 18px; padding: 0; border: none;
+  border-radius: 0 0 10px 10px; background: rgba(255,255,255,.95);
+  box-shadow: 0 4px 8px rgba(0,0,0,.12); color: #6b7280;
+  font-size: 12px; line-height: 18px; cursor: pointer;
+}
 
 .hz-dir { margin: 6px 0 4px; padding-bottom: 10px; border-bottom: 1px solid #e5e7eb; }
 .hz-input-row { display: flex; gap: 6px; margin-top: 6px; }
@@ -655,4 +690,9 @@ const CSS = `
 .hz-bar { height: 5px; background: #f3f4f6; border-radius: 3px; margin: 2px 0 6px; overflow: hidden; }
 .hz-bar > div { height: 100%; background: #f59e0b; }
 .hz-pop-foot { margin-top: 6px; font-size: 11px; color: #6b7280; }
+
+@media (max-width: 640px) {
+  .hz-panel { left: 8px; right: 8px; top: 8px; width: auto; padding: 10px 12px; }
+  .hz-sheet { bottom: 8px; }
+}
 `;
