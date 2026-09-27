@@ -154,6 +154,7 @@ export default function Home() {
         const active = p.active_incidents.length > 0;
 
         let entry = markersRef.current.get(id);
+        const wasActive = entry?.active ?? false;
         if (!entry) {
           const el = document.createElement("div");
           const popup = new maplibregl.Popup({ offset: 22, className: "hz-popup", maxWidth: "300px" });
@@ -162,8 +163,12 @@ export default function Home() {
           markersRef.current.set(id, entry);
         }
 
+        // A brand-new active incident just landed here (e.g. a report was just filed) — play a spawn animation.
+        const justAppeared = active && !wasActive;
+
         const { dot, sig } = buildDot(p);
         if (sig !== entry.sig) {
+          if (justAppeared) dot.classList.add("hz-dot-spawn");
           entry.el.replaceChildren(dot);
           entry.sig = sig;
         }
@@ -577,6 +582,12 @@ const CSS = `
   border: 3px solid #e11d48; animation: hz-pulse 1.6s ease-out infinite;
 }
 @keyframes hz-pulse { from { transform: scale(1); opacity: .56; } to { transform: scale(1.84); opacity: 0; } }
+.hz-dot-spawn { animation: hz-spawn .55s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes hz-spawn {
+  0%   { transform: scale(0);    opacity: 0; }
+  60%  { transform: scale(1.3);  opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
 .hz-badge {
   position: absolute; top: -9px; right: -16px; min-width: 22px; padding: 0 5px;
   border-radius: 999px; background: #111827; color: #fff; border: 1.5px solid #fff;
