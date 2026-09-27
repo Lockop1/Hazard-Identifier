@@ -1,5 +1,6 @@
 "use client";
 
+
 import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -348,6 +349,16 @@ export default function Home() {
 
   return (
     <>
+    <style>{CSS}</style>
+    <div ref={container} style={{ position: "fixed", inset: 0 }} />
+
+    {/* Feedback Toast Notification */}
+    {toastMessage && (
+      <div className="hz-toast">
+        <span className="hz-toast-icon">✅</span>
+        <span className="hz-toast-text">{toastMessage}</span>
+      </div>
+    )}
       <style>{CSS}</style>
       <div ref={container} style={{ position: "fixed", inset: 0 }} />
 
@@ -416,6 +427,17 @@ export default function Home() {
         </button>
       </div>
 
+<div className = "alertpopup">
+  <div className = "circle">
+<img src="\fluentui-system-icons_warning.svg" alt="Alert" />
+            
+  </div>
+  
+  <p>Collision Detected Ahead</p>
+</div>
+
+
+
       {routes && route && (
         <div className="hz-sheet">
           <div className="hz-sheet-top">
@@ -463,6 +485,34 @@ export default function Home() {
     </>
   );
 }
+
+// Toast notification system for reporting incidents
+// Inside your Home component in page.tsx
+const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+// Helper function to trigger the popup
+const showToast = (message: string) => {
+  setToastMessage(message);
+  setTimeout(() => {
+    setToastMessage(null);
+  }, 3000);
+};
+
+// Example report incident handler
+const handleReportIncident = async (type: string) => {
+  try {
+    // Perform your API call to save the report
+    // await fetch('/api/report', { method: 'POST', body: JSON.stringify({ type }) });
+
+    // Show feedback popup on success
+    showToast(`Report submitted! Thank you for updating the road conditions.`);
+  } catch (err) {
+    showToast("Failed to submit report. Please try again.");
+  }
+};
+
+
+
 
 // On/off row button used in the panel.
 function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
@@ -685,6 +735,41 @@ const CSS = `
 .hz-bar { height: 5px; background: #f3f4f6; border-radius: 3px; margin: 2px 0 6px; overflow: hidden; }
 .hz-bar > div { height: 100%; background: #f59e0b; }
 .hz-pop-foot { margin-top: 6px; font-size: 11px; color: #6b7280; }
+
+.hz-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background-color: #111827;
+  color: #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+  font: 600 14px/1.4 system-ui, -apple-system, sans-serif;
+  animation: hz-toast-in 0.25s ease-out;
+  pointer-events: none;
+}
+
+.hz-toast-icon {
+  font-size: 16px;
+}
+
+@keyframes hz-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 
 @media (max-width: 640px) {
   .hz-panel { left: 8px; right: 8px; top: 8px; width: auto; padding: 10px 12px; }

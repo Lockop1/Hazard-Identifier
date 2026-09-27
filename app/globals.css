@@ -97,17 +97,48 @@ html, body{
     object-fit: contain;
   }
 
-  .alertpopup {
+.alertpopup {
+  bottom: 20px; /* Adjust vertical placement as needed */
 
-    bottom: 0;
-    stroke: black;
-    stroke-width: 1px;
-    background-color: rgb(111, 90, 90);
-    position: fixed;
-    width: 100%;
-    border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    display: flex;
-    align-items: left;
-    justify-content: flex-start;
-  }
+ 
+  stroke: black;
+  stroke-width: 1px;
+  background-color: rgb(255, 255, 255);
+  position: fixed;
+  width: 60%;
+  border-radius: 30px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center; /* Vertically centers circle icon and text */
+  padding: 8px 16px;
+}
+
+.alertpopup .circle {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background-color: #fce788;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.alertpopup .circle img {
+  width: 60%;
+  height: 60%;
+  object-fit: contain;
+}
+
+.alertpopup p {
+  flex: 1;
+  text-align: center; /* Horizontally centers the text within the popup */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; /* Matches Road Hazard Map */
+  font-weight: 700; /* Bold weight matching titles */
+  font-size: 15px; /* Matches Road Hazard Map title size */
+  color: #111827; /* Matches text color in Road Hazard Map */
+  margin: 0;
+  padding-right: 50px; /* Balances the center alignment against the icon width */
+}
